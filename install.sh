@@ -7,6 +7,7 @@ set -euo pipefail
 
 DEST="${HOME}/.op-env-export.sh"
 REPO_RAW="https://raw.githubusercontent.com/szymonrychu/op-env/main"
+# shellcheck disable=SC2016  # intentional: ${HOME} expands when the rc file is sourced
 SOURCE_LINE='source "${HOME}/.op-env-export.sh"'
 
 # Detect local checkout vs piped installation.
