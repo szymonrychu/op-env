@@ -56,19 +56,52 @@ The hook file is never committed with secrets; it only references variables that
 
 ## Installation
 
+**One-liner (no git clone needed):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/szymonrychu/op-env/main/install.sh | bash
+```
+
+**From a local checkout:**
+
 ```bash
 git clone https://github.com/szymonrychu/op-env.git
 cd op-env
 ./install.sh
 ```
 
-`install.sh` copies `op-env-export.sh` to `~/.op-env-export.sh` and adds a `source` line to `~/.zshrc` and `~/.bashrc` (whichever exist).
+`install.sh` copies `op-env-export.sh` to `~/.op-env-export.sh` and adds a `source` line to `~/.zshrc` and `~/.bashrc` (whichever exist). Running it again upgrades the script in place without duplicating the source line.
 
 After installation, restart your shell or run:
 
 ```bash
 source ~/.op-env-export.sh
 ```
+
+## Authentication & avoiding repeated prompts
+
+By default, every `op_envs` call checks whether 1Password is authenticated. If the session has expired you'll be prompted for your master password or Touch ID.
+
+**Recommended: enable 1Password CLI integration**
+
+Open the 1Password desktop app and go to **Settings → Developer → Integrate with 1Password CLI**. With this enabled:
+
+- `op` commands use the app's active session — no separate `op signin` needed.
+- Touch ID is only required **once** when the app first unlocks, not on every `op_envs` call.
+- When the app is locked (e.g. after screen lock), a single Touch ID prompt re-unlocks it for the entire session.
+
+**CI / automation: service account token**
+
+Set `OP_SERVICE_ACCOUNT_TOKEN` in your environment (e.g. in CI secrets). `op` picks it up automatically — no interactive auth needed:
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN=ops_...
+op_envs -t myproject
+```
+
+**Legacy fallback**
+
+Without app integration or a service account token, `op_envs` falls back to `op signin`, which creates a 30-minute session stored in `OP_SESSION_*` env vars. This works but requires re-authentication every half hour.
 
 ## Usage
 

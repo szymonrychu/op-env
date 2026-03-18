@@ -15,7 +15,7 @@
 #
 # Default tag for new items (set in your shell profile to avoid repeating -t):
 #   export OP_ENV_DEFAULT_TAG="myteam"
-OP_ENV_DEFAULT_TAG="${OP_ENV_DEFAULT_TAG:-}"
+OP_ENV_DEFAULT_TAG="${OP_ENV_DEFAULT_TAG:-all}"
 
 # Prefix used to mark alias fields stored in 1Password.
 # Value format: @alias:item_title:FIELD_NAME
@@ -25,11 +25,33 @@ _OP_ALIAS_PREFIX="@alias:"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-# Ensure an active 1Password session; auto-signin if needed.
+# Ensure an active 1Password session.
+#
+# Recommended setup to avoid repeated prompts:
+#   1Password app → Settings → Developer → "Integrate with 1Password CLI"
+# With that enabled, op uses the desktop app's session — Touch ID is only
+# required once per app-unlock, not on every op_envs call.
+#
+# For CI/automation: set OP_SERVICE_ACCOUNT_TOKEN instead.
 _op_ensure_auth() {
+    # With desktop app CLI integration, this succeeds as long as the app is unlocked.
     op whoami >/dev/null 2>&1 && return 0
+
+    # Service account / CI path: op reads OP_SERVICE_ACCOUNT_TOKEN automatically;
+    # a failed whoami here means the token is missing or invalid.
+    if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+        echo "op-env: 1Password service account auth failed" >&2
+        return 1
+    fi
+
+    # Interactive fallback (legacy): prompts for master password or Touch ID.
     echo "Not signed in to 1Password — signing in..." >&2
-    eval "$(op signin)" || { echo "1Password sign-in failed" >&2; return 1; }
+    eval "$(op signin)" || {
+        echo "1Password sign-in failed." >&2
+        echo "Tip: enable CLI integration to avoid repeated prompts:" >&2
+        echo "  1Password app → Settings → Developer → Integrate with 1Password CLI" >&2
+        return 1
+    }
 }
 
 # Join arguments with commas (for --tags).
@@ -302,9 +324,9 @@ EOF
 # op_env_list — list env:* variable names from items with given tag(s)
 #               Never prints secret values.
 #
-# Usage: op_env_list -t <tag> [-t <tag2> ...] [-i] [-v <vault>]
-#   -t  tag (required, repeatable; items must have ALL specified tags)
-#   -i  prefix each variable with its item title (e.g. gitlab:GITLAB_USERNAME)
+# Usage: op_env_list [-t <tag> ...] [-i] [-v <vault>]
+#   -t  tag (repeatable; defaults to $OP_ENV_DEFAULT_TAG when omitted)
+#   -i  verbose: prefix each variable with its item title and tags
 #   -v  vault
 # ---------------------------------------------------------------------------
 op_env_list() {
@@ -316,16 +338,19 @@ op_env_list() {
 op_env_list — list env:* variable names from items with given tag(s)
               Never prints secret values.
 
-Usage: op_env_list -t <tag> [-t <tag2> ...] [-i] [-v <vault>]
+Usage: op_env_list [-t <tag> ...] [-i] [-v <vault>]
 
-  -t  tag (required, repeatable; items must have ALL specified tags)
-  -i  prefix each variable with its 1Password item title
+  -t  tag (repeatable; items must have ALL specified tags)
+      defaults to \$OP_ENV_DEFAULT_TAG ("${OP_ENV_DEFAULT_TAG}")
+  -i  verbose: prefix each variable with its item title and tags
+      e.g.  gitlab:GITLAB_USERNAME  [all,terraform]
   -v  vault name
 
 Examples:
+  op_env_list                           # all items tagged with \$OP_ENV_DEFAULT_TAG
   op_env_list -t myproject              # GITLAB_USERNAME
-  op_env_list -t myproject -i           # gitlab:GITLAB_USERNAME
-  op_env_list -t myproject -t prod -i   # items with both tags, with item prefix
+  op_env_list -t myproject -i           # gitlab:GITLAB_USERNAME  [myproject]
+  op_env_list -t myproject -t prod -i   # items with both tags, with item prefix and tags
 EOF
                return 0 ;;
             i) show_item=1 ;;
@@ -335,7 +360,10 @@ EOF
             ?) echo "op_env_list: unknown option -${OPTARG}" >&2; return 1 ;;
         esac
     done
-    [[ ${#tags[@]} -eq 0 ]] && { echo "op_env_list: at least one -t <tag> is required" >&2; return 1; }
+    if [[ ${#tags[@]} -eq 0 ]]; then
+        [[ -z "${OP_ENV_DEFAULT_TAG}" ]] && { echo "op_env_list: no tags given and OP_ENV_DEFAULT_TAG is unset" >&2; return 1; }
+        tags+=("${OP_ENV_DEFAULT_TAG}")
+    fi
     _op_ensure_auth || return 1
     local tags_csv
     tags_csv=$(_op_tags_csv "${tags[@]}")
@@ -347,15 +375,16 @@ EOF
         echo "op_env_list: no items found with tags '${tags_csv}'" >&2
         return 0
     fi
-    local entry id item_title item_data var_name
+    local entry id item_title item_tags item_data var_name
     while IFS= read -r entry; do
         id=$(printf '%s' "${entry}" | jq -r '.id')
         item_title=$(printf '%s' "${entry}" | jq -r '.title')
+        item_tags=$(printf '%s' "${entry}" | jq -r '(.tags // []) | join(",")')
         item_data=$(op item get "${id}" --format=json 2>/dev/null) || continue
         while IFS= read -r var_name; do
             [[ -z "${var_name}" ]] && continue
             if [[ "${show_item}" -eq 1 ]]; then
-                printf '%s:%s\n' "${item_title}" "${var_name}"
+                printf '%s:%s\t[%s]\n' "${item_title}" "${var_name}" "${item_tags}"
             else
                 printf '%s\n' "${var_name}"
             fi

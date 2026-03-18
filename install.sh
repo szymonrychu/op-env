@@ -1,37 +1,49 @@
 #!/usr/bin/env bash
-# Install op-env-export.sh into the current user's shell(s).
+# Install or upgrade op-env into the current user's shell(s).
 #
-# Usage: ./install.sh
-#
-# What it does:
-#   1. Copies op-env-export.sh to ~/.op-env-export.sh
-#   2. Adds `source ~/.op-env-export.sh` to ~/.zshrc and ~/.bashrc (if present)
+# Local install:   ./install.sh
+# Remote install:  curl -fsSL https://raw.githubusercontent.com/szymonrychu/op-env/main/install.sh | bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-SRC="${SCRIPT_DIR}/op-env-export.sh"
 DEST="${HOME}/.op-env-export.sh"
+REPO_RAW="https://raw.githubusercontent.com/szymonrychu/op-env/main"
 SOURCE_LINE='source "${HOME}/.op-env-export.sh"'
+
+# Detect local checkout vs piped installation.
+# BASH_SOURCE[0] is empty when the script is read from a pipe (curl | bash).
+_self="${BASH_SOURCE[0]:-}"
+_local_src=""
+if [[ -n "${_self}" ]]; then
+    _dir="$(cd -P -- "$(dirname -- "${_self}")" 2>/dev/null && pwd -P)" || true
+    [[ -f "${_dir}/op-env-export.sh" ]] && _local_src="${_dir}/op-env-export.sh"
+fi
+
+[[ -f "${DEST}" ]] && _action="Upgrading" || _action="Installing"
+echo "${_action} op-env..."
+
+if [[ -n "${_local_src}" ]]; then
+    cp "${_local_src}" "${DEST}"
+    echo "  installed from local checkout → ${DEST}"
+else
+    curl -fsSL "${REPO_RAW}/op-env-export.sh" -o "${DEST}"
+    echo "  downloaded → ${DEST}"
+fi
 
 _add_source_line() {
     local rc_file="${1}"
     [[ -f "${rc_file}" ]] || return 0
     if grep -qF 'op-env-export.sh' "${rc_file}"; then
-        echo "  already sourced in ${rc_file} — skipping"
+        echo "  ${rc_file}: already configured"
     else
-        printf '\n# op-env — 1Password environment variable manager\n%s\n' "${SOURCE_LINE}" >> "${rc_file}"
-        echo "  added source line to ${rc_file}"
+        printf '\n# op-env — 1Password environment variable manager\n%s\n' \
+            "${SOURCE_LINE}" >> "${rc_file}"
+        echo "  ${rc_file}: added source line"
     fi
 }
-
-echo "Installing op-env-export.sh..."
-
-cp "${SRC}" "${DEST}"
-echo "  copied to ${DEST}"
 
 _add_source_line "${HOME}/.zshrc"
 _add_source_line "${HOME}/.bashrc"
 
 echo ""
-echo "Done. Restart your shell or run:"
+echo "${_action} complete. Restart your shell or run:"
 echo "  source ${DEST}"
