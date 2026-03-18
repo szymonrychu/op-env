@@ -130,6 +130,64 @@ _op_export_fields() {
     ')"
 }
 
+# Write all env:* fields from item JSON to a .env file, resolving @alias: references.
+# Usage: _op_dotenv_write_fields <item_json> <outfile>
+# Appends KEY=value lines; does NOT print to stdout.
+_op_dotenv_write_fields() {
+    local item_data="${1}" outfile="${2}"
+    local alias_line var_name alias_body alias_item alias_field
+    local ref_id ref_data ref_value
+
+    # Write regular (non-alias) env:* fields as KEY=value
+    printf '%s' "${item_data}" | jq -r \
+        --arg pfx "${_OP_ALIAS_PREFIX}" '
+        .fields[]? |
+        select(.label | startswith("env:")) |
+        select(.label[4:] | test("^[A-Za-z_][A-Za-z0-9_]*$")) |
+        select(.value // "" | startswith($pfx) | not) |
+        (.label[4:]) + "=" + (.value // "")
+    ' >> "${outfile}"
+
+    # Resolve alias fields
+    while IFS= read -r alias_line; do
+        [[ -z "${alias_line}" ]] && continue
+        var_name="${alias_line%% *}"
+        alias_body="${alias_line#*"${_OP_ALIAS_PREFIX}"}"
+        alias_item="${alias_body%%:*}"
+        alias_field="${alias_body#*:}"
+
+        if [[ ! "${var_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "op_env_dotfile: alias has invalid var name '${var_name}'" >&2
+            return 1
+        fi
+
+        ref_id=$(_op_find_item_id "${alias_item}" "" "")
+        if [[ -z "${ref_id}" ]]; then
+            echo "op_env_dotfile: alias '${var_name}': item '${alias_item}' not found" >&2
+            return 1
+        fi
+
+        ref_data=$(op item get "${ref_id}" --format=json 2>/dev/null) || return 1
+        ref_value=$(printf '%s' "${ref_data}" | jq -r \
+            --arg f "env:${alias_field}" \
+            '.fields[]? | select(.label == $f) | .value // ""')
+
+        if [[ -z "${ref_value}" ]]; then
+            echo "op_env_dotfile: alias '${var_name}': field 'env:${alias_field}' not found in '${alias_item}'" >&2
+            return 1
+        fi
+
+        printf '%s=%s\n' "${var_name}" "${ref_value}" >> "${outfile}"
+    done <<< "$(printf '%s' "${item_data}" | jq -r \
+        --arg pfx "${_OP_ALIAS_PREFIX}" '
+        .fields[]? |
+        select(.label | startswith("env:")) |
+        select(.label[4:] | test("^[A-Za-z_][A-Za-z0-9_]*$")) |
+        select(.value // "" | startswith($pfx)) |
+        (.label[4:]) + " " + (.value // "")
+    ')"
+}
+
 # ---------------------------------------------------------------------------
 # op_env — fetch and export env:* variables from a specific item
 #
@@ -395,6 +453,65 @@ EOF
             .label[4:]
         ')"
     done <<< "$(printf '%s' "${items}" | jq -c '.[]')"
+}
+
+# ---------------------------------------------------------------------------
+# op_env_dotfile — write env:* variables from items with given tag(s) to a
+#                  .env file. Never prints secret values to the terminal.
+#
+# Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-o <file>] [-v <vault>]
+#   -t  tag (required, repeatable; items must have ALL specified tags)
+#   -o  output file path (default: .env in the current directory)
+#   -v  vault
+# ---------------------------------------------------------------------------
+op_env_dotfile() {
+    local OPTIND=1 vault="" outfile=".env"
+    local -a tags=()
+    while getopts ":ht:v:o:" opt; do
+        case "${opt}" in
+            h) cat <<'EOF' >&2
+op_env_dotfile — write env:* variables from items with given tag(s) to a .env file
+                 Never prints secret values to the terminal.
+
+Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-o <file>] [-v <vault>]
+
+  -t  tag (required, repeatable; items must have ALL specified tags)
+  -o  output file path (default: .env in the current directory)
+  -v  vault name
+
+Examples:
+  op_env_dotfile -t myproject                 # writes .env in CWD
+  op_env_dotfile -t myproject -o /tmp/my.env  # custom path
+  op_env_dotfile -t myproject -t prod         # items with both tags
+EOF
+               return 0 ;;
+            t) tags+=("${OPTARG}") ;;
+            v) vault="${OPTARG}" ;;
+            o) outfile="${OPTARG}" ;;
+            :) echo "op_env_dotfile: -${OPTARG} requires an argument" >&2; return 1 ;;
+            ?) echo "op_env_dotfile: unknown option -${OPTARG}" >&2; return 1 ;;
+        esac
+    done
+    [[ ${#tags[@]} -eq 0 ]] && { echo "op_env_dotfile: at least one -t <tag> is required" >&2; return 1; }
+    _op_ensure_auth || return 1
+    local tags_csv
+    tags_csv=$(_op_tags_csv "${tags[@]}")
+    local -a list_args=("item" "list" "--tags" "${tags_csv}" "--format=json")
+    [[ -n "${vault}" ]] && list_args+=("--vault" "${vault}")
+    local items
+    items=$(op "${list_args[@]}" 2>/dev/null) || return 1
+    if [[ "${items}" == "[]" || -z "${items}" ]]; then
+        echo "op_env_dotfile: no items found with tags '${tags_csv}'" >&2
+        return 1
+    fi
+    local tmpfile
+    tmpfile=$(mktemp) || return 1
+    local id item_data
+    while IFS= read -r id; do
+        item_data=$(op item get "${id}" --format=json 2>/dev/null) || continue
+        _op_dotenv_write_fields "${item_data}" "${tmpfile}" || { rm -f "${tmpfile}"; return 1; }
+    done <<< "$(printf '%s' "${items}" | jq -r '.[].id')"
+    mv "${tmpfile}" "${outfile}"
 }
 
 # ---------------------------------------------------------------------------
