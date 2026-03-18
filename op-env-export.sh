@@ -459,32 +459,37 @@ EOF
 # op_env_dotfile — write env:* variables from items with given tag(s) to a
 #                  .env file. Never prints secret values to the terminal.
 #
-# Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-o <file>] [-v <vault>]
+# Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-f] [-o <file>] [-v <vault>]
 #   -t  tag (required, repeatable; items must have ALL specified tags)
+#   -f  force overwrite; without -f the function exits cleanly if the file exists
 #   -o  output file path (default: .env in the current directory)
 #   -v  vault
 # ---------------------------------------------------------------------------
 op_env_dotfile() {
-    local OPTIND=1 vault="" outfile=".env"
+    local OPTIND=1 vault="" outfile=".env" force=0
     local -a tags=()
-    while getopts ":ht:v:o:" opt; do
+    while getopts ":hft:v:o:" opt; do
         case "${opt}" in
             h) cat <<'EOF' >&2
 op_env_dotfile — write env:* variables from items with given tag(s) to a .env file
                  Never prints secret values to the terminal.
 
-Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-o <file>] [-v <vault>]
+Usage: op_env_dotfile -t <tag> [-t <tag2> ...] [-f] [-o <file>] [-v <vault>]
 
   -t  tag (required, repeatable; items must have ALL specified tags)
+  -f  force: overwrite the file if it already exists
+      without -f, the function exits cleanly when the file exists
   -o  output file path (default: .env in the current directory)
   -v  vault name
 
 Examples:
-  op_env_dotfile -t myproject                 # writes .env in CWD
-  op_env_dotfile -t myproject -o /tmp/my.env  # custom path
-  op_env_dotfile -t myproject -t prod         # items with both tags
+  op_env_dotfile -t myproject                  # writes .env; skips if .env exists
+  op_env_dotfile -t myproject -f               # always overwrites .env
+  op_env_dotfile -t myproject -o /tmp/my.env   # custom path
+  op_env_dotfile -t myproject -t prod -f       # items with both tags, force
 EOF
                return 0 ;;
+            f) force=1 ;;
             t) tags+=("${OPTARG}") ;;
             v) vault="${OPTARG}" ;;
             o) outfile="${OPTARG}" ;;
@@ -493,6 +498,7 @@ EOF
         esac
     done
     [[ ${#tags[@]} -eq 0 ]] && { echo "op_env_dotfile: at least one -t <tag> is required" >&2; return 1; }
+    [[ "${force}" -eq 0 && -f "${outfile}" ]] && return 0
     _op_ensure_auth || return 1
     local tags_csv
     tags_csv=$(_op_tags_csv "${tags[@]}")
