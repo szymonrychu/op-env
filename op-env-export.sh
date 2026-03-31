@@ -517,6 +517,11 @@ EOF
         item_data=$(op item get "${id}" --format=json 2>/dev/null) || continue
         _op_dotenv_write_fields "${item_data}" "${tmpfile}" || { rm -f "${tmpfile}"; return 1; }
     done <<< "$(printf '%s' "${items}" | jq -r '.[].id')"
+    local hook_file
+    hook_file=$(_op_find_hook_file)
+    if [[ -n "${hook_file}" ]]; then
+        cat "${hook_file}" >> "${tmpfile}"
+    fi
     mv "${tmpfile}" "${outfile}"
 }
 
